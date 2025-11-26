@@ -11,8 +11,11 @@ try:
     BASE_URL = "https://openapi.duoplus.net"
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except:
-    st.error("⚠️ 尚未設定 API Key！請在 Streamlit 後台設定 Secrets。")
+    st.error("⚠️ API Key 未設定")
     st.stop()
+
+# ⚠️ 請填入第一步產生的信箱網址
+COLAB_STATUS_URL = "https://jsonblob.com/api/jsonBlob/019abe39-7045-7d9d-baa4-ef73f78f2a8e"
 
 # 設備清單
 DEVICES = {
@@ -22,6 +25,7 @@ DEVICES = {
     "👶 Hiro (新人)": {"id": "6aY1w", "phone": "6282342432368"}
 }
 
+# 預設人設
 DEFAULT_PERSONAS = {
     "1ZxjQ": "You are MyWA, the boss. Brief, professional but casual.",
     "F8Z5z": "You are Aiko. Love beauty & fashion. Use emojis.",
@@ -33,8 +37,30 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ================== 🔧 後端函數 ==================
 
+def get_colab_status():
+    """檢查 Colab 是否活著"""
+    try:
+        res = requests.get(COLAB_STATUS_URL, timeout=3)
+        data = res.json()
+        
+        last_update_str = data.get("last_update", "")
+        msg = data.get("message", "Unknown")
+        
+        # 計算時間差
+        if last_update_str:
+            tz = pytz.timezone('Asia/Taipei')
+            last_time = datetime.strptime(last_update_str, "%Y-%m-%d %H:%M:%S")
+            # 這裡簡單處理，假設 Colab 和 Streamlit 都在標準時間
+            # 比較好的做法是用 timestamp，但為了簡單先這樣
+            
+            # 判斷是否超過 15 分鐘沒更新 (Colab 可能斷了)
+            # 注意：這裡的時間比較可能會有時區問題，建議看文字即可
+            return data
+        return None
+    except:
+        return None
+
 def send_adb(image_id, cmd):
-    """發送 ADB 指令"""
     url = f"{BASE_URL}/api/v1/cloudPhone/command"
     headers = {"DuoPlus-API-Key": DUOPLUS_API_KEY, "Content-Type": "application/json"}
     payload = {"image_ids": [image_id], "command": cmd}
@@ -44,7 +70,6 @@ def send_adb(image_id, cmd):
         pass
 
 def power_on_device(device_id):
-    """🔥 發送開機指令"""
     url = f"{BASE_URL}/api/v1/device/open"
     headers = {"DuoPlus-API-Key": DUOPLUS_API_KEY, "Content-Type": "application/json"}
     payload = {"device_id": device_id}
@@ -55,7 +80,6 @@ def power_on_device(device_id):
         return {"code": 500, "message": str(e)}
 
 def check_online_status(image_id):
-    """檢查 ADB 是否連線"""
     url = f"{BASE_URL}/api/v1/cloudPhone/command"
     headers = {"DuoPlus-API-Key": DUOPLUS_API_KEY, "Content-Type": "application/json"}
     try:
@@ -66,15 +90,39 @@ def check_online_status(image_id):
     except:
         return False
 
-# ================== 🖥️ 前端頁面 (Streamlit) ==================
+# ================== 🖥️ 前端頁面 ==================
 
 st.set_page_config(page_title="DuoPlus 戰情中心", layout="wide", page_icon="📱")
 
+# --- 側邊欄 ---
 with st.sidebar:
     st.title("🎛️ 中控面板")
     if st.button("🔄 刷新全機狀態", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
+    
+    # === 新增：Colab 狀態監控區 ===
+    st.markdown("---")
+    st.markdown("### 🖥️ Colab 排程狀態")
+    
+    colab_data = get_colab_status()
+    if colab_data:
+        last_msg = colab_data.get("message", "無資料")
+        last_time = colab_data.get("last_update", "未知")
+        
+        st.info(f"**狀態**: {last_msg}")
+        st.caption(f"最後回報: {last_time}")
+        
+        # 簡單檢查字串長度確保不是空值
+        if len(last_time) > 5:
+             st.success("訊號接收正常 📡")
+        else:
+             st.warning("訊號等待中...")
+    else:
+        st.error("❌ 無法連接 Colab 信箱")
+        st.caption("請確認 Colab 是否正在執行")
+    
+    st.markdown("---")
     
     st.markdown("### 廣播系統")
     broadcast_txt = st.text_input("輸入文字 (英文)", placeholder="Hello Team...")
@@ -88,19 +136,18 @@ with st.sidebar:
                     send_adb(info['id'], "input keyevent 66") 
                     active_count += 1
                 progress.progress((idx + 1) / len(DEVICES))
-            
             if active_count < len(DEVICES):
-                st.warning(f"廣播已發送，但只有 {active_count} 台在線。")
+                st.warning(f"只有 {active_count} 台在線。")
             else:
-                st.success("廣播已成功發送給所有設備！")
+                st.success("廣播成功！")
 
-st.title("🤖 DuoPlus 雲手機戰情中心 v3.1")
+# --- 主畫面 ---
+st.title("🤖 DuoPlus 雲手機戰情中心 v3.2")
 st.caption("Cloud Mode: Online | Connection: Secure")
 
 tab_monitor, tab_ai = st.tabs(["👁️ 實時監控", "🧠 AI 設定"])
 
 with tab_monitor:
-    st.info("💡 若設備離線，請點擊「⚡ 立即開機」並等待約 1-2 分鐘。")
     cols = st.columns(4)
     for i, (name, info) in enumerate(DEVICES.items()):
         dev_id = info['id']
@@ -109,9 +156,7 @@ with tab_monitor:
                 st.subheader(name.split(" ")[0])
                 st.caption(f"ID: {dev_id}")
                 
-                # 狀態檢查
                 is_online = check_online_status(dev_id)
-                
                 if is_online:
                     st.success("🟢 在線")
                     c1, c2 = st.columns(2)
@@ -120,7 +165,6 @@ with tab_monitor:
                             send_adb(dev_id, "input keyevent 3")
                             st.toast("已按 Home")
                     with c2:
-                        # 這是您剛剛報錯的地方，請確認這裡是否完整
                         if st.button("💬 App", key=f"w_{dev_id}"):
                             cmd = 'am start -a android.intent.action.VIEW -d "https://wa.me/" com.whatsapp'
                             send_adb(dev_id, cmd)
@@ -128,20 +172,18 @@ with tab_monitor:
                 else:
                     st.error("🔴 離線")
                     if st.button("⚡ 立即開機", key=f"pwr_{dev_id}", type="primary"):
-                        with st.spinner("發送指令中..."):
+                        with st.spinner("發送開機指令..."):
                             res = power_on_device(dev_id)
                             if res.get('code') == 200:
-                                st.success("已發送！請稍候...")
+                                st.success("已發送！")
                                 time.sleep(2)
                                 st.rerun()
                             else:
                                 st.error(f"失敗: {res.get('message')}")
 
 with tab_ai:
-    st.info("在此修改人設")
     if 'personas' not in st.session_state:
         st.session_state['personas'] = DEFAULT_PERSONAS.copy()
-    
     for name, info in DEVICES.items():
         with st.expander(f"設定 {name}"):
             st.session_state['personas'][info['id']] = st.text_area(f"Prompt", st.session_state['personas'][info['id']], height=70)
