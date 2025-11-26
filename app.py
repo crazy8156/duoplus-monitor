@@ -25,7 +25,6 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 @st.cache_data
 def load_devices_from_csv():
-    """讀取 CSV，失敗則回傳預設 4 台"""
     try:
         df = pd.read_csv("devices.csv")
         df.columns = [c.strip() for c in df.columns]
@@ -39,7 +38,6 @@ def load_devices_from_csv():
                 devices[name] = {"id": d_id, "phone": phone}
         return devices
     except:
-        # 預設名單
         return {
             "👑 MyWA (老闆)": {"id": "1ZxjQ", "phone": "886916802803"},
             "💄 Aiko (美妝)": {"id": "F8Z5z", "phone": "6281299393526"},
@@ -47,10 +45,8 @@ def load_devices_from_csv():
             "👶 Hiro (新人)": {"id": "6aY1w", "phone": "6282342432368"}
         }
 
-# 1. 載入設備
 DEVICES = load_devices_from_csv()
 
-# 2. 初始化人設
 DEFAULT_PERSONAS = {}
 for name in DEVICES.keys():
     DEFAULT_PERSONAS[DEVICES[name]['id']] = "You are a casual user using WhatsApp. Friendly and polite."
@@ -70,29 +66,44 @@ def send_adb(image_id, cmd):
     payload = {"image_ids": [image_id], "command": cmd}
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=5)
-        return res.json()
+        # 確保回傳的一定是字典，避免 NoneType 錯誤
+        if res.status_code == 200:
+            return res.json()
+        return {"code": 500}
     except:
         return {"code": 500}
 
+def safe_get_data(res, image_id):
+    """🛡️ 安全讀取助手：防止 API 回傳 None 導致崩潰"""
+    if not res or not isinstance(res, dict):
+        return ""
+    data = res.get('data')
+    if not data or not isinstance(data, dict):
+        return ""
+    val = data.get(image_id)
+    if val is None:
+        return ""
+    return str(val).strip()
+
 def get_real_status(image_id):
     """
-    🔍 精準狀態判斷
+    🔍 精準狀態判斷 (加入防呆機制)
     """
     # 步驟 1: 基礎連線
     res_ls = send_adb(image_id, "ls")
     if res_ls.get('code') != 200:
         return "🔴 關機中", "stopped"
 
-    # 步驟 2: 檢查系統啟動
+    # 步驟 2: 檢查系統啟動 (使用 safe_get_data 防止崩潰)
     res_boot = send_adb(image_id, "getprop sys.boot_completed")
-    boot_val = res_boot.get('data', {}).get(image_id, "").strip()
+    boot_val = safe_get_data(res_boot, image_id)
     
     if boot_val != "1":
         return "🟡 開機中", "booting"
     
-    # 步驟 3: 檢查 App
+    # 步驟 3: 檢查 App (使用 safe_get_data 防止崩潰)
     res_app = send_adb(image_id, "dumpsys window windows | grep mFocusedApp")
-    app_out = res_app.get('data', {}).get(image_id, "")
+    app_out = safe_get_data(res_app, image_id)
     
     if "com.whatsapp" in app_out:
         return "🟢 執行中 (WhatsApp)", "running"
@@ -134,28 +145,24 @@ with st.sidebar:
     else:
         st.error("Colab 失聯 ❌")
 
-st.title("🤖 DuoPlus 雲手機戰情中心 v4.3")
-st.caption("Mode: Stable Fix | Source: CSV")
+st.title("🤖 DuoPlus 雲手機戰情中心 v4.4")
+st.caption("Mode: Crash Proof | Source: CSV")
 
-# ================== 📄 分頁邏輯 (修復重點) ==================
+# ================== 📄 分頁邏輯 ==================
 
-# 1. 確保 device_list 被正確定義
 device_list = list(DEVICES.items())
 DEVICES_PER_PAGE = 8
 
-# 2. 計算總頁數
 if len(device_list) > 0:
     total_pages = (len(device_list) - 1) // DEVICES_PER_PAGE + 1
 else:
     total_pages = 1
 
-# 3. 顯示滑桿
 if total_pages > 1:
     page = st.slider("選擇頁數", 1, total_pages, 1)
 else:
     page = 1
 
-# 4. 切割名單 (Slicing)
 start_idx = (page - 1) * DEVICES_PER_PAGE
 end_idx = min(start_idx + DEVICES_PER_PAGE, len(device_list))
 current_page_devices = device_list[start_idx:end_idx]
@@ -173,7 +180,10 @@ with tab_monitor:
         future_to_id = {executor.submit(get_real_status, info['id']): info['id'] for name, info in current_page_devices}
         for future in concurrent.futures.as_completed(future_to_id):
             d_id = future_to_id[future]
-            status_map[d_id] = future.result()
+            try:
+                status_map[d_id] = future.result()
+            except:
+                status_map[d_id] = ("⚠️ 連線逾時", "loading")
 
     cols = st.columns(4)
     
@@ -181,7 +191,6 @@ with tab_monitor:
         dev_id = info['id']
         col_idx = i % 4
         
-        # 取得狀態
         status_text, status_code = status_map.get(dev_id, ("⏳ 讀取中...", "loading"))
         
         with cols[col_idx]:
@@ -189,7 +198,6 @@ with tab_monitor:
                 st.subheader(name)
                 st.caption(f"ID: {dev_id}")
                 
-                # 狀態顯示
                 if status_code == "running":
                     st.success(status_text)
                 elif status_code == "booting":
@@ -199,7 +207,6 @@ with tab_monitor:
                 else:
                     st.info(status_text)
                 
-                # 按鈕
                 if status_code == "stopped":
                     if st.button("⚡ 開機", key=f"pwr_{dev_id}", type="primary"):
                         power_on_device(dev_id)
