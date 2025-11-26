@@ -44,8 +44,8 @@ def send_adb(image_id, cmd):
         pass
 
 def power_on_device(device_id):
-    """🔥 新增：發送開機指令"""
-    url = f"{BASE_URL}/api/v1/device/open" # 根據之前經驗，這是開機接口
+    """🔥 發送開機指令"""
+    url = f"{BASE_URL}/api/v1/device/open"
     headers = {"DuoPlus-API-Key": DUOPLUS_API_KEY, "Content-Type": "application/json"}
     payload = {"device_id": device_id}
     try:
@@ -59,7 +59,6 @@ def check_online_status(image_id):
     url = f"{BASE_URL}/api/v1/cloudPhone/command"
     headers = {"DuoPlus-API-Key": DUOPLUS_API_KEY, "Content-Type": "application/json"}
     try:
-        # 傳送 ls 指令測試
         res = requests.post(url, headers=headers, json={"image_ids": [image_id], "command": "ls"}, timeout=3)
         if res.status_code == 200 and res.json().get('code') == 200:
             return True
@@ -84,7 +83,6 @@ with st.sidebar:
             progress = st.progress(0)
             active_count = 0
             for idx, (name, info) in enumerate(DEVICES.items()):
-                # 先檢查是否在線，才發送
                 if check_online_status(info['id']):
                     send_adb(info['id'], f"input text {broadcast_txt.replace(' ', '%s')}")
                     send_adb(info['id'], "input keyevent 66") 
@@ -92,7 +90,7 @@ with st.sidebar:
                 progress.progress((idx + 1) / len(DEVICES))
             
             if active_count < len(DEVICES):
-                st.warning(f"廣播已發送，但只有 {active_count} 台在線，離線設備未收到。")
+                st.warning(f"廣播已發送，但只有 {active_count} 台在線。")
             else:
                 st.success("廣播已成功發送給所有設備！")
 
@@ -102,7 +100,7 @@ st.caption("Cloud Mode: Online | Connection: Secure")
 tab_monitor, tab_ai = st.tabs(["👁️ 實時監控", "🧠 AI 設定"])
 
 with tab_monitor:
-    st.info("💡 如果設備顯示離線，請點擊「⚡ 開機」並等待約 1-2 分鐘。")
+    st.info("💡 若設備離線，請點擊「⚡ 立即開機」並等待約 1-2 分鐘。")
     cols = st.columns(4)
     for i, (name, info) in enumerate(DEVICES.items()):
         dev_id = info['id']
@@ -111,16 +109,43 @@ with tab_monitor:
                 st.subheader(name.split(" ")[0])
                 st.caption(f"ID: {dev_id}")
                 
-                # 狀態檢查與操作邏輯
+                # 狀態檢查
                 is_online = check_online_status(dev_id)
                 
                 if is_online:
                     st.success("🟢 在線")
-                    # 在線時顯示操作按鈕
                     c1, c2 = st.columns(2)
                     with c1:
                         if st.button("🏠 Home", key=f"h_{dev_id}"):
                             send_adb(dev_id, "input keyevent 3")
                             st.toast("已按 Home")
                     with c2:
-                        if st.button("💬
+                        # 這是您剛剛報錯的地方，請確認這裡是否完整
+                        if st.button("💬 App", key=f"w_{dev_id}"):
+                            cmd = 'am start -a android.intent.action.VIEW -d "https://wa.me/" com.whatsapp'
+                            send_adb(dev_id, cmd)
+                            st.toast("開啟 WhatsApp")
+                else:
+                    st.error("🔴 離線")
+                    if st.button("⚡ 立即開機", key=f"pwr_{dev_id}", type="primary"):
+                        with st.spinner("發送指令中..."):
+                            res = power_on_device(dev_id)
+                            if res.get('code') == 200:
+                                st.success("已發送！請稍候...")
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error(f"失敗: {res.get('message')}")
+
+with tab_ai:
+    st.info("在此修改人設")
+    if 'personas' not in st.session_state:
+        st.session_state['personas'] = DEFAULT_PERSONAS.copy()
+    
+    for name, info in DEVICES.items():
+        with st.expander(f"設定 {name}"):
+            st.session_state['personas'][info['id']] = st.text_area(f"Prompt", st.session_state['personas'][info['id']], height=70)
+
+st.divider()
+tz = pytz.timezone('Asia/Taipei')
+st.caption(f"Server Time: {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
