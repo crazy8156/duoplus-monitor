@@ -86,14 +86,18 @@ def safe_get_data(res, image_id):
 
 def get_real_status(image_id):
     """
-    🔍 v4.5 嚴格狀態判斷
+    🔍 v4.6 關鍵字過濾狀態判斷
     """
-    # 步驟 1: 測試連線 (ls /system) - 確保一定有內容
-    # 如果是空的，代表根本連不上 -> 關機
+    # 步驟 1: 基礎連線測試
+    # ls /system 應該要回傳 bin, etc, app 等資料夾
     res_ls = send_adb(image_id, "ls /system")
-    ls_data = safe_get_data(res_ls, image_id)
+    ls_data = safe_get_data(res_ls, image_id).lower()
     
-    if not ls_data: 
+    # 🛑 關鍵修正：檢查回傳內容是否包含錯誤關鍵字
+    error_keywords = ["offline", "not found", "error", "closed", "null", "device"]
+    
+    # 如果內容是空的，或者是錯誤訊息 -> 關機
+    if not ls_data or any(x in ls_data for x in error_keywords) or len(ls_data) < 5:
         return "🔴 關機中", "stopped"
 
     # 步驟 2: 檢查系統啟動 (Boot Completed)
@@ -103,7 +107,7 @@ def get_real_status(image_id):
     if boot_val != "1":
         return "🟡 開機中", "booting"
     
-    # 步驟 3: 檢查 App
+    # 步驟 3: 檢查 App (只做加分確認)
     res_app = send_adb(image_id, "dumpsys window windows | grep mFocusedApp")
     app_out = safe_get_data(res_app, image_id)
     
@@ -147,8 +151,8 @@ with st.sidebar:
     else:
         st.error("Colab 失聯 ❌")
 
-st.title("🤖 DuoPlus 雲手機戰情中心 v4.5")
-st.caption("Mode: Strict Status | Source: CSV")
+st.title("🤖 DuoPlus 雲手機戰情中心 v4.6")
+st.caption("Mode: Strict Keyword Filter | Source: CSV")
 
 # ================== 📄 分頁邏輯 ==================
 
@@ -200,7 +204,6 @@ with tab_monitor:
                 st.subheader(name)
                 st.caption(f"ID: {dev_id}")
                 
-                # 狀態燈號邏輯
                 if status_code == "running":
                     st.success(status_text)
                 elif status_code == "booting":
@@ -208,39 +211,5 @@ with tab_monitor:
                 else: # stopped
                     st.error(status_text) 
                 
-                # 按鈕顯示邏輯
                 if status_code == "stopped":
-                    # 關機 -> 顯示開機紐
-                    if st.button("⚡ 開機", key=f"pwr_{dev_id}", type="primary"):
-                        power_on_device(dev_id)
-                        st.info("指令發送")
-                        time.sleep(2)
-                        st.rerun()
-                else:
-                    # 開機 -> 顯示控制紐
-                    st.markdown("---")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button("🏠 Home", key=f"h_{dev_id}"):
-                            send_adb(dev_id, "input keyevent 3")
-                            st.toast("已按 Home")
-                    with c2:
-                        if st.button("💬 App", key=f"w_{dev_id}"):
-                            send_adb(dev_id, 'am start -a android.intent.action.VIEW -d "https://wa.me/" com.whatsapp')
-                            st.toast("開啟 WhatsApp")
-
-with tab_ai:
-    if 'personas' not in st.session_state:
-        st.session_state['personas'] = DEFAULT_PERSONAS.copy()
-    
-    for name, info in current_page_devices:
-        d_id = info['id']
-        if d_id not in st.session_state['personas']:
-            st.session_state['personas'][d_id] = "Casual user."
-        
-        with st.expander(f"設定 {name}"):
-            st.session_state['personas'][d_id] = st.text_area(f"Prompt", st.session_state['personas'][d_id], height=70, key=f"ai_{d_id}")
-
-st.divider()
-tz = pytz.timezone('Asia/Taipei')
-st.caption(f"Server Time: {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')}")
+                    if st.button("⚡ 開機", key=
