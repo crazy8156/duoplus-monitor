@@ -66,7 +66,6 @@ def send_adb(image_id, cmd):
     payload = {"image_ids": [image_id], "command": cmd}
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=5)
-        # 確保回傳的一定是字典，避免 NoneType 錯誤
         if res.status_code == 200:
             return res.json()
         return {"code": 500}
@@ -74,7 +73,7 @@ def send_adb(image_id, cmd):
         return {"code": 500}
 
 def safe_get_data(res, image_id):
-    """🛡️ 安全讀取助手：防止 API 回傳 None 導致崩潰"""
+    """🛡️ 安全讀取助手"""
     if not res or not isinstance(res, dict):
         return ""
     data = res.get('data')
@@ -87,21 +86,24 @@ def safe_get_data(res, image_id):
 
 def get_real_status(image_id):
     """
-    🔍 精準狀態判斷 (加入防呆機制)
+    🔍 v4.5 嚴格狀態判斷
     """
-    # 步驟 1: 基礎連線
-    res_ls = send_adb(image_id, "ls")
-    if res_ls.get('code') != 200:
+    # 步驟 1: 測試連線 (ls /system) - 確保一定有內容
+    # 如果是空的，代表根本連不上 -> 關機
+    res_ls = send_adb(image_id, "ls /system")
+    ls_data = safe_get_data(res_ls, image_id)
+    
+    if not ls_data: 
         return "🔴 關機中", "stopped"
 
-    # 步驟 2: 檢查系統啟動 (使用 safe_get_data 防止崩潰)
+    # 步驟 2: 檢查系統啟動 (Boot Completed)
     res_boot = send_adb(image_id, "getprop sys.boot_completed")
     boot_val = safe_get_data(res_boot, image_id)
     
     if boot_val != "1":
         return "🟡 開機中", "booting"
     
-    # 步驟 3: 檢查 App (使用 safe_get_data 防止崩潰)
+    # 步驟 3: 檢查 App
     res_app = send_adb(image_id, "dumpsys window windows | grep mFocusedApp")
     app_out = safe_get_data(res_app, image_id)
     
@@ -145,8 +147,8 @@ with st.sidebar:
     else:
         st.error("Colab 失聯 ❌")
 
-st.title("🤖 DuoPlus 雲手機戰情中心 v4.4")
-st.caption("Mode: Crash Proof | Source: CSV")
+st.title("🤖 DuoPlus 雲手機戰情中心 v4.5")
+st.caption("Mode: Strict Status | Source: CSV")
 
 # ================== 📄 分頁邏輯 ==================
 
@@ -183,7 +185,7 @@ with tab_monitor:
             try:
                 status_map[d_id] = future.result()
             except:
-                status_map[d_id] = ("⚠️ 連線逾時", "loading")
+                status_map[d_id] = ("🔴 關機中 (逾時)", "stopped")
 
     cols = st.columns(4)
     
@@ -198,22 +200,24 @@ with tab_monitor:
                 st.subheader(name)
                 st.caption(f"ID: {dev_id}")
                 
+                # 狀態燈號邏輯
                 if status_code == "running":
                     st.success(status_text)
                 elif status_code == "booting":
                     st.warning(status_text)
-                elif status_code == "stopped":
-                    st.error(status_text)
-                else:
-                    st.info(status_text)
+                else: # stopped
+                    st.error(status_text) 
                 
+                # 按鈕顯示邏輯
                 if status_code == "stopped":
+                    # 關機 -> 顯示開機紐
                     if st.button("⚡ 開機", key=f"pwr_{dev_id}", type="primary"):
                         power_on_device(dev_id)
                         st.info("指令發送")
                         time.sleep(2)
                         st.rerun()
                 else:
+                    # 開機 -> 顯示控制紐
                     st.markdown("---")
                     c1, c2 = st.columns(2)
                     with c1:
