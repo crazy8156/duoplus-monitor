@@ -51,46 +51,41 @@ def send_adb(image_id, cmd):
     headers = {"DuoPlus-API-Key": DUOPLUS_API_KEY, "Content-Type": "application/json"}
     payload = {"image_ids": [image_id], "command": cmd}
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        # 截圖資料量大，timeout 設定為 15 秒
+        res = requests.post(url, headers=headers, json=payload, timeout=15)
         return res.json()
     except Exception as e:
         return {"code": 500, "message": str(e)}
 
-def get_screenshot(image_id):
-    """📸 獲取單台畫面 (回傳 binary 或 None)"""
-    cmd = "screencap -p | base64 -w 0"
-    res = send_adb(image_id, cmd)
+def get_screenshot_stable(image_id):
+    """📸 穩定版截圖 (兩步法)"""
+    # 步驟 1: 先截圖存到手機 (避免 pipe 緩衝區問題)
+    cmd_cap = "screencap -p /data/local/tmp/screen.png"
+    send_adb(image_id, cmd_cap)
+    
+    # 步驟 2: 讀取檔案轉 Base64
+    cmd_read = "cat /data/local/tmp/screen.png | base64 -w 0"
+    res = send_adb(image_id, cmd_read)
+    
+    # 步驟 3: 清理檔案 (非同步，發了就不管)
+    # threading.Thread(target=send_adb, args=(image_id, "rm /data/local/tmp/screen.png")).start()
+    
     try:
         if res.get('code') == 200:
+            # 取得回傳的字串
             raw_output = res.get('data', {}).get(image_id, "")
-            # 簡單驗證是否為 Base64
-            if len(raw_output) > 100:
-                return base64.b64decode(raw_output)
-    except:
-        pass
-    return None
-
-def fetch_all_screenshots_parallel():
-    """⚡ 加速：同時抓取所有設備截圖"""
-    results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        # 建立任務清單
-        future_to_id = {executor.submit(get_screenshot, info['id']): dev_id for dev_id, info in DEVICES.items()}
-        for future in concurrent.futures.as_completed(future_to_id):
-            dev_name = future_to_id[future] # 其實這裡是 key name
-            # 找出對應的 ID
-            target_id = None
-            for name, info in DEVICES.items():
-                if info['id'] == future_to_id[future]: # wait logic slightly wrong above, fix below
-                    pass 
             
-            try:
-                data = future.result()
-                if data:
-                    results[future_to_id[future]] = data # Key 是 device_id
-            except:
-                pass
-    return results
+            # 簡單除錯：如果回傳太短，肯定不是圖片
+            if len(raw_output) < 100:
+                print(f"截圖失敗 (資料過短): {raw_output}")
+                return None
+                
+            # 嘗試解碼
+            return base64.b64decode(raw_output)
+    except Exception as e:
+        print(f"截圖解析錯誤: {e}")
+        return None
+    return None
 
 def power_on_device(device_id):
     url = f"{BASE_URL}/api/v1/device/open"
@@ -116,7 +111,7 @@ st.set_page_config(page_title="DuoPlus 戰情中心", layout="wide", page_icon="
 with st.sidebar:
     st.title("🎛️ 中控面板")
     
-    # === 🔥 新增：自動監控開關 ===
+    # === 🔥 自動監控開關 ===
     st.markdown("### 📸 自動監控")
     auto_refresh_mode = st.toggle("啟動每 30 秒自動截圖", value=False)
     
@@ -137,20 +132,14 @@ with st.sidebar:
         st.error("無法連接信箱 ❌")
 
 # --- 主畫面 ---
-st.title("🤖 DuoPlus 雲手機戰情中心 v3.4")
+st.title("🤖 DuoPlus 雲手機戰情中心 v3.5")
 st.caption("Mode: Hybrid Cloud | Auto-Monitor: " + ("ON" if auto_refresh_mode else "OFF"))
 
-# 如果開啟自動模式，嘗試並行抓圖
+# 🔥 自動抓圖邏輯 (放在最前面執行)
 if auto_refresh_mode:
-    # 這裡只在每次 rerun 時執行一次
-    # 為了避免每次操作按鈕都重抓，我們可以只在倒數結束時抓
-    # 但 Streamlit 機制比較特殊，我們直接抓最新的放入 Session
-    
-    # 使用 Spinner 顯示進度
-    with st.spinner("⚡ 正在同步所有畫面..."):
-        # 平行處理抓圖 (速度快)
+    with st.spinner("⚡ 自動同步畫面中..."):
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            future_map = {executor.submit(get_screenshot, info['id']): info['id'] for name, info in DEVICES.items()}
+            future_map = {executor.submit(get_screenshot_stable, info['id']): info['id'] for name, info in DEVICES.items()}
             for future in concurrent.futures.as_completed(future_map):
                 d_id = future_map[future]
                 img = future.result()
@@ -168,54 +157,24 @@ with tab_monitor:
                 st.subheader(name.split(" ")[0])
                 st.caption(f"ID: {dev_id}")
                 
-                # 顯示圖片 (如果有在 Session 中)
+                # 圖片顯示區
                 img_key = f"img_{dev_id}"
                 if img_key in st.session_state:
                     st.image(st.session_state[img_key], caption="最新畫面", use_container_width=True)
                 else:
-                    st.info("尚無畫面 (請開啟自動監控或手動截圖)")
+                    st.info("尚無畫面")
 
                 # 操作按鈕
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    if st.button("📸", key=f"s_{dev_id}", help="單張截圖"):
-                        img = get_screenshot(dev_id)
-                        if img: st.session_state[img_key] = img
-                        st.rerun()
+                    if st.button("📸", key=f"s_{dev_id}", help="手動截圖"):
+                        img = get_screenshot_stable(dev_id)
+                        if img:
+                            st.session_state[img_key] = img
+                            st.rerun() # 抓完立刻刷新
+                        else:
+                            st.error("截圖失敗")
                 with c2:
-                    if st.button("🏠", key=f"h_{dev_id}", help="回首頁"):
+                    if st.button("🏠", key=f"h_{dev_id}"):
                         send_adb(dev_id, "input keyevent 3")
                         st.toast("已按 Home")
-                with c3:
-                    if st.button("💬", key=f"w_{dev_id}", help="開 WhatsApp"):
-                        send_adb(dev_id, 'am start -a android.intent.action.VIEW -d "https://wa.me/" com.whatsapp')
-                        st.toast("開啟 WhatsApp")
-
-with tab_ai:
-    if 'personas' not in st.session_state:
-        st.session_state['personas'] = DEFAULT_PERSONAS.copy()
-    for name, info in DEVICES.items():
-        with st.expander(f"設定 {name}"):
-            st.session_state['personas'][info['id']] = st.text_area(f"Prompt", st.session_state['personas'][info['id']], height=70)
-
-st.divider()
-tz = pytz.timezone('Asia/Taipei')
-now_str = datetime.now(tz).strftime('%H:%M:%S')
-st.caption(f"Server Time: {now_str}")
-
-# === 🔥 自動刷新邏輯 ===
-if auto_refresh_mode:
-    # 顯示倒數計時條
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    # 倒數 30 秒
-    for i in range(30):
-        # 為了讓使用者還有機會按「停止」，我們切成 30 次 1 秒
-        time.sleep(1)
-        progress = (i + 1) / 30
-        progress_bar.progress(progress)
-        status_text.text(f"下一次更新: {30 - i} 秒後...")
-    
-    # 時間到，重新整理網頁
-    st.rerun()
