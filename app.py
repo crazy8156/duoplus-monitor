@@ -11,10 +11,10 @@ try:
     BASE_URL = "https://openapi.duoplus.net"
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except:
-    st.error("⚠️ API Key 未設定")
+    st.error("⚠️ API Key 未設定，請在 Streamlit Secrets 設定。")
     st.stop()
 
-# ⚠️ 請填入第一步產生的信箱網址
+# 📡 Colab 狀態信箱 (必須與 Colab 端一致)
 COLAB_STATUS_URL = "https://jsonblob.com/api/jsonBlob/019abe39-7045-7d9d-baa4-ef73f78f2a8e"
 
 # 設備清單
@@ -38,25 +38,10 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ================== 🔧 後端函數 ==================
 
 def get_colab_status():
-    """檢查 Colab 是否活著"""
+    """從雲端信箱讀取 Colab 狀態"""
     try:
         res = requests.get(COLAB_STATUS_URL, timeout=3)
-        data = res.json()
-        
-        last_update_str = data.get("last_update", "")
-        msg = data.get("message", "Unknown")
-        
-        # 計算時間差
-        if last_update_str:
-            tz = pytz.timezone('Asia/Taipei')
-            last_time = datetime.strptime(last_update_str, "%Y-%m-%d %H:%M:%S")
-            # 這裡簡單處理，假設 Colab 和 Streamlit 都在標準時間
-            # 比較好的做法是用 timestamp，但為了簡單先這樣
-            
-            # 判斷是否超過 15 分鐘沒更新 (Colab 可能斷了)
-            # 注意：這裡的時間比較可能會有時區問題，建議看文字即可
-            return data
-        return None
+        return res.json()
     except:
         return None
 
@@ -70,6 +55,7 @@ def send_adb(image_id, cmd):
         pass
 
 def power_on_device(device_id):
+    """發送開機指令"""
     url = f"{BASE_URL}/api/v1/device/open"
     headers = {"DuoPlus-API-Key": DUOPLUS_API_KEY, "Content-Type": "application/json"}
     payload = {"device_id": device_id}
@@ -80,6 +66,7 @@ def power_on_device(device_id):
         return {"code": 500, "message": str(e)}
 
 def check_online_status(image_id):
+    """檢查 ADB 是否連線"""
     url = f"{BASE_URL}/api/v1/cloudPhone/command"
     headers = {"DuoPlus-API-Key": DUOPLUS_API_KEY, "Content-Type": "application/json"}
     try:
@@ -101,26 +88,21 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
     
-    # === 新增：Colab 狀態監控區 ===
+    # === Colab 狀態顯示區 ===
     st.markdown("---")
-    st.markdown("### 🖥️ Colab 排程狀態")
+    st.markdown("### 📡 Colab 排程訊號")
     
     colab_data = get_colab_status()
     if colab_data:
-        last_msg = colab_data.get("message", "無資料")
-        last_time = colab_data.get("last_update", "未知")
+        msg = colab_data.get("message", "無訊號")
+        last_time = colab_data.get("last_update", "")
         
-        st.info(f"**狀態**: {last_msg}")
-        st.caption(f"最後回報: {last_time}")
-        
-        # 簡單檢查字串長度確保不是空值
-        if len(last_time) > 5:
-             st.success("訊號接收正常 📡")
-        else:
-             st.warning("訊號等待中...")
+        st.info(f"**{msg}**")
+        st.caption(f"最後更新: {last_time}")
+        if last_time:
+             st.success("連線正常 ✅")
     else:
-        st.error("❌ 無法連接 Colab 信箱")
-        st.caption("請確認 Colab 是否正在執行")
+        st.error("無法連接信箱 ❌")
     
     st.markdown("---")
     
@@ -129,25 +111,26 @@ with st.sidebar:
     if st.button("📢 發送給所有人"):
         if broadcast_txt:
             progress = st.progress(0)
-            active_count = 0
+            cnt = 0
             for idx, (name, info) in enumerate(DEVICES.items()):
                 if check_online_status(info['id']):
                     send_adb(info['id'], f"input text {broadcast_txt.replace(' ', '%s')}")
                     send_adb(info['id'], "input keyevent 66") 
-                    active_count += 1
+                    cnt += 1
                 progress.progress((idx + 1) / len(DEVICES))
-            if active_count < len(DEVICES):
-                st.warning(f"只有 {active_count} 台在線。")
+            if cnt < len(DEVICES):
+                st.warning(f"已發送，但只有 {cnt} 台在線。")
             else:
                 st.success("廣播成功！")
 
 # --- 主畫面 ---
 st.title("🤖 DuoPlus 雲手機戰情中心 v3.2")
-st.caption("Cloud Mode: Online | Connection: Secure")
+st.caption("Mode: Hybrid Cloud | Colab Status: Monitored")
 
 tab_monitor, tab_ai = st.tabs(["👁️ 實時監控", "🧠 AI 設定"])
 
 with tab_monitor:
+    st.info("💡 離線設備請按「⚡ 立即開機」並等待 1-2 分鐘。")
     cols = st.columns(4)
     for i, (name, info) in enumerate(DEVICES.items()):
         dev_id = info['id']
@@ -172,7 +155,7 @@ with tab_monitor:
                 else:
                     st.error("🔴 離線")
                     if st.button("⚡ 立即開機", key=f"pwr_{dev_id}", type="primary"):
-                        with st.spinner("發送開機指令..."):
+                        with st.spinner("指令發送中..."):
                             res = power_on_device(dev_id)
                             if res.get('code') == 200:
                                 st.success("已發送！")
