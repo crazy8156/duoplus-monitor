@@ -7,6 +7,11 @@ import concurrent.futures
 from datetime import datetime
 from openai import OpenAI
 
+# ================== ⚙️ 全域設定區 (變數放這裡最安全) ==================
+
+# 分頁設定：每頁顯示幾台設備 (移到最上方防止報錯)
+DEVICES_PER_PAGE = 8 
+
 # ================== 🔒 安全設定區 ==================
 try:
     DUOPLUS_API_KEY = st.secrets["DUOPLUS_API_KEY"]
@@ -38,6 +43,7 @@ def load_devices_from_csv():
                 devices[name] = {"id": d_id, "phone": phone}
         return devices
     except:
+        # 預設 4 台
         return {
             "👑 MyWA (老闆)": {"id": "1ZxjQ", "phone": "886916802803"},
             "💄 Aiko (美妝)": {"id": "F8Z5z", "phone": "6281299393526"},
@@ -85,29 +91,26 @@ def safe_get_data(res, image_id):
     return str(val).strip()
 
 def get_real_status(image_id):
-    """
-    🔍 v4.6 關鍵字過濾狀態判斷
-    """
-    # 步驟 1: 基礎連線測試
-    # ls /system 應該要回傳 bin, etc, app 等資料夾
+    """🔍 v4.6 邏輯：關鍵字過濾 + 嚴格關機判定"""
+    # 步驟 1: 基礎連線測試 (ls /system)
     res_ls = send_adb(image_id, "ls /system")
     ls_data = safe_get_data(res_ls, image_id).lower()
     
-    # 🛑 關鍵修正：檢查回傳內容是否包含錯誤關鍵字
+    # 錯誤關鍵字列表
     error_keywords = ["offline", "not found", "error", "closed", "null", "device"]
     
-    # 如果內容是空的，或者是錯誤訊息 -> 關機
+    # 若資料為空、過短、或包含錯誤關鍵字 -> 🔴 關機中
     if not ls_data or any(x in ls_data for x in error_keywords) or len(ls_data) < 5:
         return "🔴 關機中", "stopped"
 
-    # 步驟 2: 檢查系統啟動 (Boot Completed)
+    # 步驟 2: 檢查系統啟動
     res_boot = send_adb(image_id, "getprop sys.boot_completed")
     boot_val = safe_get_data(res_boot, image_id)
     
     if boot_val != "1":
         return "🟡 開機中", "booting"
     
-    # 步驟 3: 檢查 App (只做加分確認)
+    # 步驟 3: 檢查 App (加分項)
     res_app = send_adb(image_id, "dumpsys window windows | grep mFocusedApp")
     app_out = safe_get_data(res_app, image_id)
     
@@ -151,13 +154,12 @@ with st.sidebar:
     else:
         st.error("Colab 失聯 ❌")
 
-st.title("🤖 DuoPlus 雲手機戰情中心 v4.6")
-st.caption("Mode: Strict Keyword Filter | Source: CSV")
+st.title("🤖 DuoPlus 雲手機戰情中心 v4.7")
+st.caption("Mode: Strict & Crash Proof | Source: CSV")
 
-# ================== 📄 分頁邏輯 ==================
+# ================== 📄 分頁邏輯 (已修復 NameError) ==================
 
 device_list = list(DEVICES.items())
-DEVICES_PER_PAGE = 8
 
 if len(device_list) > 0:
     total_pages = (len(device_list) - 1) // DEVICES_PER_PAGE + 1
@@ -204,12 +206,45 @@ with tab_monitor:
                 st.subheader(name)
                 st.caption(f"ID: {dev_id}")
                 
+                # 狀態燈號
                 if status_code == "running":
                     st.success(status_text)
                 elif status_code == "booting":
                     st.warning(status_text)
-                else: # stopped
-                    st.error(status_text) 
+                else: 
+                    st.error(status_text) # stopped
                 
+                # 按鈕顯示
                 if status_code == "stopped":
-                    if st.button("⚡ 開機", key=
+                    if st.button("⚡ 開機", key=f"pwr_{dev_id}", type="primary"):
+                        power_on_device(dev_id)
+                        st.info("指令發送")
+                        time.sleep(2)
+                        st.rerun()
+                else:
+                    st.markdown("---")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("🏠 Home", key=f"h_{dev_id}"):
+                            send_adb(dev_id, "input keyevent 3")
+                            st.toast("已按 Home")
+                    with c2:
+                        if st.button("💬 App", key=f"w_{dev_id}"):
+                            send_adb(dev_id, 'am start -a android.intent.action.VIEW -d "https://wa.me/" com.whatsapp')
+                            st.toast("開啟 WhatsApp")
+
+with tab_ai:
+    if 'personas' not in st.session_state:
+        st.session_state['personas'] = DEFAULT_PERSONAS.copy()
+    
+    for name, info in current_page_devices:
+        d_id = info['id']
+        if d_id not in st.session_state['personas']:
+            st.session_state['personas'][d_id] = "Casual user."
+        
+        with st.expander(f"設定 {name}"):
+            st.session_state['personas'][d_id] = st.text_area(f"Prompt", st.session_state['personas'][d_id], height=70, key=f"ai_{d_id}")
+
+st.divider()
+tz = pytz.timezone('Asia/Taipei')
+st.caption(f"Server Time: {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')}")
